@@ -34,13 +34,15 @@ class ViewController: UIViewController {
     
     var videoPlaybackPosition: CGFloat = 0.0
     var cache:NSCache<AnyObject, AnyObject>!
-    var rangSlider: RangeSlider! = nil
+    var timeSlider: TimeSlider! = nil
     
     @IBOutlet weak var videoPlayerView: UIView!
     @IBOutlet weak var saveButton: UIButton!
     
     @IBOutlet weak var frameContainerView: UIView!
     @IBOutlet weak var imageFrameView: UIView!
+    
+    var initialCenter = CGPoint()
     
     var startTimestr = ""
     var endTimestr = ""
@@ -72,8 +74,61 @@ class ViewController: UIViewController {
         
         videoPlayerView.layer.addSublayer(playerLayer)
         player.play()
+            
+        NotificationCenter.default.addObserver(self, selector: #selector(reachTheEndOfTheVideo(_:)), name: NSNotification.Name.AVPlayerItemDidPlayToEndTime, object: self.player?.currentItem)
+            
+        let timeScale = CMTimeScale(NSEC_PER_SEC)
+        player!.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.25, preferredTimescale: timeScale),
+            queue: DispatchQueue.main
+            )
+        { (CMTime) -> Void in
+            if self.player!.currentItem?.status == .readyToPlay {
+                let time = CMTimeGetSeconds(self.player!.currentTime());
+                self.timeSlider.barValue = ( time / CMTimeGetSeconds(self.thumbTime) ) * 100.0;
+            }
+        }
+            
         }
         // Do any additional setup after loading the view, typically from a nib.
+    }
+
+    @objc func reachTheEndOfTheVideo(_ notification: Notification) {
+        player?.pause()
+        player?.seek(to: CMTime.zero)
+        player?.play()
+    }
+    
+    @IBAction func scaleView(_ sender: UIPinchGestureRecognizer) {
+        guard sender.view != nil else { return }
+        
+        if sender.state == .began || sender.state == .changed {
+            sender.view?.transform = (sender.view?.transform.scaledBy(x: sender.scale, y: sender.scale))!
+            sender.scale = 1.0
+        }
+    }
+    
+    @IBAction func moveView(_ sender: UIPanGestureRecognizer) {
+        
+        guard sender.view != nil else {return}
+        let piece = sender.view!
+        // Get the changes in the X and Y directions relative to
+        // the superview's coordinate space.
+        let translation = sender.translation(in: piece.superview)
+        if sender.state == .began {
+            // Save the view's original position.
+            self.initialCenter = piece.center
+        }
+        // Update the position for the .began, .changed, and .ended states
+        if sender.state != .cancelled {
+            // Add the X and Y translation to the view's original position.
+            let newCenter = CGPoint(x: initialCenter.x + translation.x, y: initialCenter.y + translation.y)
+            piece.center = newCenter
+        }
+        else {
+            // On cancellation, return the piece to its original location.
+            piece.center = initialCenter
+        }
     }
     
     //Loading Views
@@ -98,15 +153,7 @@ class ViewController: UIViewController {
         
         //Allocating NsCahe for temp storage
         self.cache = NSCache()
-    }
-    
-    
-    //Action for crop video
-    @IBAction func cropVideo(_ sender: Any)
-    {
-        let start = Float(startTimestr)
-        let end   = Float(endTimestr)
-        self.cropVideo(sourceURL1: url, startTime: start!, endTime: end!)
+        
     }
     
 }
@@ -134,6 +181,12 @@ extension ViewController:UIImagePickerControllerDelegate,UINavigationControllerD
         startTimestr = "\(0.0)"
         endTimestr   = "\(thumbtimeSeconds!)"
         self.createrangSlider()
+        
+        
+        //        if let timeObserverToken = timeObserverToken {
+        //            player.removeTimeObserver(timeObserverToken)
+        //            self.timeObserverToken = nil
+        //        }
     }
     
     //Tap action on video player
@@ -150,7 +203,22 @@ extension ViewController:UIImagePickerControllerDelegate,UINavigationControllerD
         isPlaying = !isPlaying
     }
     
-    
+    func createThumbnailOfVideoFromRemoteUrl(url: String) -> UIImage? {
+        let asset = AVAsset(url: URL(string: url)!)
+        let assetImgGenerate = AVAssetImageGenerator(asset: asset)
+        assetImgGenerate.appliesPreferredTrackTransform = true
+        //Can set this to improve performance if target size is known before hand
+        //assetImgGenerate.maximumSize = CGSize(width,height)
+        let time = CMTimeMakeWithSeconds(1.0, preferredTimescale: 600)
+        do {
+            let img = try assetImgGenerate.copyCGImage(at: time, actualTime: nil)
+            let thumbnail = UIImage(cgImage: img)
+            return thumbnail
+        } catch {
+            print(error.localizedDescription)
+            return nil
+        }
+    }
     
     //MARK: CreatingFrameImages
     func createImageFrames()
@@ -160,26 +228,26 @@ extension ViewController:UIImagePickerControllerDelegate,UINavigationControllerD
         assetImgGenerate.appliesPreferredTrackTransform = true
         assetImgGenerate.requestedTimeToleranceAfter    = CMTime.zero;
         assetImgGenerate.requestedTimeToleranceBefore   = CMTime.zero;
-        
-        
         assetImgGenerate.appliesPreferredTrackTransform = true
-        let thumbTime: CMTime = asset.duration
-        let thumbtimeSeconds  = Int(CMTimeGetSeconds(thumbTime))
-        let maxLength         = "\(thumbtimeSeconds)" as NSString
         
-        let thumbAvg  = thumbtimeSeconds/6
-        var startTime = 1
+        let numThumb:CGFloat = 10.0
+        let lenThumb:CGFloat = self.imageFrameView.frame.width/numThumb
+        
+        let assetDur: CMTime = asset.duration
+        let assetTime = CGFloat(assetDur.value) / CGFloat(assetDur.timescale)
+        let timeThumb:CGFloat = assetTime/numThumb
+        
+        var startTime:CGFloat = 0.0
         var startXPosition:CGFloat = 0.0
         
-        //loop for 6 number of frames
-        for _ in 0...5
+        for _ in 0...Int(numThumb)-1
         {
-            
             let imageButton = UIButton()
-            let xPositionForEach = CGFloat(self.imageFrameView.frame.width)/6
-            imageButton.frame = CGRect(x: CGFloat(startXPosition), y: CGFloat(0), width: xPositionForEach, height: CGFloat(self.imageFrameView.frame.height))
+            imageButton.frame = CGRect(x: CGFloat(startXPosition), y: CGFloat(0),
+                                       width: lenThumb, height: CGFloat(self.imageFrameView.frame.height))
             do {
-                let time:CMTime = CMTimeMakeWithSeconds(Float64(startTime),preferredTimescale: Int32(maxLength.length))
+                let timeScale = Int32(assetTime)
+                let time:CMTime = CMTimeMakeWithSeconds(Float64(startTime), preferredTimescale: timeScale)
                 let img = try assetImgGenerate.copyCGImage(at: time, actualTime: nil)
                 let image = UIImage(cgImage: img)
                 imageButton.setImage(image, for: .normal)
@@ -190,8 +258,8 @@ extension ViewController:UIImagePickerControllerDelegate,UINavigationControllerD
                 print("Image generation failed with error (error)")
             }
             
-            startXPosition = startXPosition + xPositionForEach
-            startTime = startTime + thumbAvg
+            startXPosition = startXPosition + lenThumb
+            startTime = startTime + timeThumb
             imageButton.isUserInteractionEnabled = false
             imageFrameView.addSubview(imageButton)
         }
@@ -209,52 +277,27 @@ extension ViewController:UIImagePickerControllerDelegate,UINavigationControllerD
             }
         }
         
-        rangSlider = RangeSlider(frame: frameContainerView.bounds)
-        frameContainerView.addSubview(rangSlider)
-        rangSlider.tag = 1000
+        timeSlider = TimeSlider(frame: frameContainerView.bounds)
+        frameContainerView.addSubview(timeSlider)
+        timeSlider.tag = 1000
         
         //Range slider action
-        rangSlider.addTarget(self, action: #selector(ViewController.rangSliderValueChanged(_:)), for: .valueChanged)
+        timeSlider.addTarget(self, action: #selector(ViewController.timeSliderValueChanged(_:)), for: .valueChanged)
         
         let time = DispatchTime.now() + Double(Int64(NSEC_PER_SEC)) / Double(NSEC_PER_SEC)
         DispatchQueue.main.asyncAfter(deadline: time) {
-            self.rangSlider.trackHighlightTintColor = UIColor.clear
-            self.rangSlider.curvaceousness = 1.0
+            self.timeSlider.trackHighlightTintColor = UIColor.clear
+            self.timeSlider.curvaceousness = 1.0
         }
         
     }
     
-    //MARK: rangSlider Delegate
-    @objc func rangSliderValueChanged(_ rangSlider: RangeSlider) {
-//        self.player.pause()
-        
-        if(isSliderEnd == true)
-        {
-            rangSlider.minimumValue = 0.0
-            rangSlider.maximumValue = Double(thumbtimeSeconds)
-            
-            rangSlider.upperValue = Double(thumbtimeSeconds)
-            isSliderEnd = !isSliderEnd
-            
-        }
-        
-        startTimestr = "\(rangSlider.lowerValue)"
-        endTimestr   = "\(rangSlider.upperValue)"
-        
-        print(rangSlider.lowerLayerSelected)
-        if(rangSlider.lowerLayerSelected)
-        {
-            self.seekVideo(toPos: CGFloat(rangSlider.lowerValue))
-            
-        }
-        else
-        {
-            self.seekVideo(toPos: CGFloat(rangSlider.upperValue))
-            
-        }
-        
-        print(startTime)
+    //MARK: timeSlider Delegate
+    @objc func timeSliderValueChanged(_ timeSlider: TimeSlider) {
+        self.player.pause()
+        self.seekVideo(toPos: CGFloat(timeSlider.barValue)/100.0 * CGFloat(CMTimeGetSeconds(thumbTime)))
     }
+    
     //Seek video when slide
     func seekVideo(toPos pos: CGFloat) {
         self.videoPlaybackPosition = pos
@@ -266,61 +309,6 @@ extension ViewController:UIImagePickerControllerDelegate,UINavigationControllerD
             self.player.pause()
         }
     }
-    
-    //Trim Video Function
-    func cropVideo(sourceURL1: NSURL, startTime:Float, endTime:Float)
-    {
-        let manager                 = FileManager.default
-        
-        guard let documentDirectory = try? manager.url(for: .documentDirectory,
-                                                       in: .userDomainMask,
-                                                       appropriateFor: nil,
-                                                       create: true) else {return}
-        guard let mediaType         = "mp4" as? String else {return}
-        guard (sourceURL1 as? NSURL) != nil else {return}
-        
-        if mediaType == kUTTypeMovie as String || mediaType == "mp4" as String
-        {
-            let length = Float(asset.duration.value) / Float(asset.duration.timescale)
-            print("video length: \(length) seconds")
-            
-            let start = startTime
-            let end = endTime
-            print(documentDirectory)
-            var outputURL = documentDirectory.appendingPathComponent("output")
-            do {
-                try manager.createDirectory(at: outputURL, withIntermediateDirectories: true, attributes: nil)
-                //let name = hostent.newName()
-                outputURL = outputURL.appendingPathComponent("1.mp4")
-            }catch let error {
-                print(error)
-            }
-            
-            //Remove existing file
-            _ = try? manager.removeItem(at: outputURL)
-            
-            guard let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {return}
-            exportSession.outputURL = outputURL
-            exportSession.outputFileType = AVFileType.mp4
-            
-            let startTime = CMTime(seconds: Double(start ), preferredTimescale: 1000)
-            let endTime = CMTime(seconds: Double(end ), preferredTimescale: 1000)
-            let timeRange = CMTimeRange(start: startTime, end: endTime)
-            
-            exportSession.timeRange = timeRange
-            exportSession.exportAsynchronously{
-                switch exportSession.status {
-                case .completed:
-                    print("exported at \(outputURL)")
-                    self.saveToCameraRoll(URL: outputURL as NSURL!)
-                case .failed:
-                    print("failed \(exportSession.error)")
-                    
-                case .cancelled:
-                    print("cancelled \(String(describing: exportSession.error))")
-                    
-                default: break
-                }}}}
     
     //Save Video to Photos Library
     func saveToCameraRoll(URL: NSURL!) {
